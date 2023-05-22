@@ -1,0 +1,101 @@
+import json
+import os
+import concurrent.futures
+import time
+import collections
+import numpy as np
+import random
+
+task_status_file = 'task_status.json'
+
+# Load task_status from file if it exists
+if os.path.exists(task_status_file):
+    with open(task_status_file, 'r') as f:
+        task_status = json.load(f)
+else:
+    task_status = {}
+
+def process_customer_ids_poc1(task_id, query_mode, customerids_chunk):
+    print(f'START: Task {task_id} started successfully for query mode {query_mode}')
+    random_number = random.randint(1, 10)
+    time.sleep(random_number)
+    print(f'END: Task {task_id} processed successfully for query mode {query_mode}, waiting seconds {random_number}')
+    task_status[task_id] = 'COMPLETED'
+
+def process_customer_ids_poc2(task_name, query_mode, customer_id_list):
+    print('START', task_name, "Processing", len(customer_id_list), "ids")
+    task_status[task_name] = 'WIP'
+    random_number = random.randint(3, 10)
+    try:
+        time.sleep(random_number)
+        task_status[task_name] = 'COMPLETED'
+        print('ENDED', task_name, "Sleep", random_number)
+    except:
+        task_status[task_name] = 'INCOMPLETE (ERROR)'
+
+allcustomerids = [x for x in range(100)]
+query_modes = 'ABCDEFGH'
+
+# POC 1: Customer IDs are split into chunks of 10
+customerids_chunks_poc1 = np.array_split(allcustomerids, np.ceil(len(allcustomerids) / 10))
+
+# Stage 1: Run POC1 tasks
+with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+    future_to_task_id_and_chunk = {}
+
+    # POC 1: Submitting tasks to the executor
+    for i, customerids_chunk in enumerate(customerids_chunks_poc1):
+        for query_mode in query_modes:
+            task_id = f"POC1-{query_mode}-{i+1}"
+            if task_id not in task_status or task_status[task_id] != 'COMPLETED':
+                task_status[task_id] = 'OPEN'
+                time.sleep(1)
+                future = executor.submit(process_customer_ids_poc1, task_id, query_mode, customerids_chunk.tolist())
+                future_to_task_id_and_chunk[future] = (task_id, customerids_chunk)
+
+    for future in concurrent.futures.as_completed(future_to_task_id_and_chunk):
+        task_id, customerids_chunk = future_to_task_id_and_chunk[future]
+        try:
+            future.result()
+            task_status[task_id] = "COMPLETE"
+        except Exception as exc:
+            print(f'An error occurred while processing the task {task_id}: {exc}')
+            task_status[task_id] = "INCOMPLETE"
+
+# Save task_status to file after stage 1
+with open(task_status_file, 'w') as f:
+    json.dump(task_status, f)
+
+# POC 2: We are reusing allcustomerids as per the assumption made in this example
+customerIDs_poc2 = np.array_split(allcustomerids, len(allcustomerids) // 10)
+
+# Stage 2: Run POC2 tasks
+with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+    future_to_task_name = {}
+    worker_counters = collections.defaultdict(int)
+    for query_mode in query_modes:
+        for customer_id_list in customerIDs_poc2:
+            worker_counters[query_mode] += 1
+            task_name = f"POC2-{query_mode}-{worker_counters[query_mode]}"
+            if task_name not in task_status or task_status[task_name] != 'COMPLETED':
+                task_status[task_name] = 'OPEN'
+                time.sleep(1)
+                future = executor.submit(process_customer_ids_poc2, task_name, query_mode, customer_id_list.tolist())
+                future_to_task_name[future] = task_name
+
+    for future in concurrent.futures.as_completed(future_to_task_name):
+        task_name = future_to_task_name[future]
+        try:
+            future.result()
+            if task_status[task_name] != 'INCOMPLETE (ERROR)':
+                task_status[task_name] = 'COMPLETED'
+        except Exception as exc:
+            print(f'{task_name} generated an exception: {exc}')
+            task_status[task_name] = 'INCOMPLETE (ERROR)'
+
+# Save task_status to file after stage 2
+with open(task_status_file, 'w') as f:
+    json.dump(task_status, f)
+
+for task_name, status in task_status.items():
+    print(f"{task_name}: {status}")
